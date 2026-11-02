@@ -1,15 +1,77 @@
-# Python
-__pycache__/
-*.pyc
+# ============================================================
+#  AI 短剧素材流水线 / AI Film Studio
+#  原则：只追踪「源码 + 锁文件」，不追踪任何「本机生成物」
+#  强制添加某个被忽略的文件：git add -f 路径
+#
+#  ⚠️ 注意：.gitignore 的注释必须【单独占一行】
+#     写成 "*.pyc  # 说明" 是错的，git 会把整行当成模式
+# ============================================================
+
+# ---------- Python 虚拟环境 ----------
 .venv/
+venv/
+env/
+
+# ---------- Python 字节码 / 编译缓存 ----------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---------- Python 打包产物 ----------
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# ---------- Python 测试 / 类型检查 / lint 缓存 ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------- 密钥与环境变量（最重要！绝不能提交） ----------
+.env
+.env.*
+!.env.example
+
+# ---------- 数据库文件 ----------
+*.db
+*.sqlite
+*.sqlite3
 backend/data/
 
-# Node
+# ---------- 生成的媒体素材与本地存储 ----------
+storage/
+backend/storage/
+*.log
+
+# ---------- Node / 前端 ----------
 node_modules/
+.pnpm-store/
+.vite/
+build/
 dist/
 
-# 系统
-.DS_Store
+# ---------- TypeScript 增量构建缓存 ----------
+*.tsbuildinfo
 
-# TS 增量构建缓存
-frontend/tsconfig.tsbuildinfo
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+
+# ---------- 编辑器 / IDE ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
