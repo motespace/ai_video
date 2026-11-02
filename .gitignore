@@ -10,3 +10,6 @@ dist/
 
 # 系统
 .DS_Store
+
+# TS 增量构建缓存
+frontend/tsconfig.tsbuildinfo
