@@ -17,6 +17,7 @@ ORM 模型 = 表结构声明。
   为什么拆？一个镜头要生成 3 版图 + 2 版视频时，
   混装表就只能"开多行"（镜头重复了）或"加字段"（列爆炸）。
 """
+
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -46,11 +47,22 @@ class Project(Base):
     # 关系：反向的那一侧在对应类里（back_populates 必须双向都写）
     storyboards: Mapped[list["Storyboard"]] = relationship(
         back_populates="project",
-        cascade="all, delete-orphan",   # 删项目 → 级联删分镜
+        cascade="all, delete-orphan",  # 删项目 → 级联删分镜
     )
     generate_tasks: Mapped[list["GenerateTask"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
+    )
+
+    episodes: Mapped[list["Episode"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+    characters: Mapped[list["Character"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    scenes: Mapped[list["Scene"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
     )
 
 
@@ -65,14 +77,23 @@ class Storyboard(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    idx: Mapped[int] = mapped_column(Integer, nullable=False)                   # 第几个镜头
-    prompt: Mapped[str] = mapped_column(Text, nullable=False)                   # 画面描述
-    image_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # 图片提示词
-    video_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # 视频提示词
-    shot_size: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)     # 景别
-    camera_movement: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 运镜
-    duration: Mapped[Optional[float]] = mapped_column(Float, nullable=True)      # 时长（秒）
-    dialogue: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # 对白
+    idx: Mapped[int] = mapped_column(Integer, nullable=False)  # 第几个镜头
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)  # 画面描述
+    image_prompt: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 图片提示词
+    video_prompt: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 视频提示词
+    shot_size: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 景别
+    camera_movement: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # 运镜
+
+    duration: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )  # 时长（秒）
+    dialogue: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 对白
     character_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
@@ -99,9 +120,13 @@ class GenerateTask(Base):
         ForeignKey("storyboards.id"), nullable=True
     )
 
-    task_type: Mapped[str] = mapped_column(String(20), nullable=False)     # image / video
-    provider: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # 模型供应商
-    provider_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # 供应商那边的 id
+    task_type: Mapped[str] = mapped_column(String(20), nullable=False)  # image / video
+    provider: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # 模型供应商
+    provider_task_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )  # 供应商那边的 id
 
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -114,4 +139,24 @@ class GenerateTask(Base):
     updated_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
 
     project: Mapped["Project"] = relationship(back_populates="generate_tasks")
-    storyboard: Mapped[Optional["Storyboard"]] = relationship(back_populates="generate_tasks")
+    storyboard: Mapped[Optional["Storyboard"]] = relationship(
+        back_populates="generate_tasks"
+    )
+
+
+# 加到 backend/app/db/models.py
+class Episode(Base):  # 剧集
+    __tablename__ = "episodes"
+    id, project_id(FK), episode_no, title, synopsis, status, created_at, updated_at
+
+
+class Character(Base):  # 角色
+    __tablename__ = "characters"
+    id, project_id(
+        FK
+    ), name, description, appearance, personality, costume, status, created_at, updated_at
+
+
+class Scene(Base):  # 场景
+    __tablename__ = "scenes"
+    id, project_id(FK), name, description, time_of_day, mood, created_at, updated_at
