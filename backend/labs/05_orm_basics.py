@@ -22,6 +22,89 @@ class Base(DeclarativeBase):
 
 
 # ============================================================
+# 【实验 0】语法剖析：Mapped[...] 和 mapped_column(...) 到底是什么
+# 对应 C3
+# ============================================================
+print("\n" + "=" * 60)
+print("【实验 0】一行代码的拆解")
+print("=" * 60)
+
+print("""
+这一行字面上是什么意思：
+
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    ─────  ─────────────  ───────────────────────────────────────────
+    名字    类型标注        值（一个函数调用的返回值）
+
+Python 通用语法：`名: 标注 = 值`（Python 3.6+ 的变量注解）
+
+两半各管一件事：
+  Mapped[str]          → Python 侧的类型（给 IDE、类型检查器、SQLAlchemy 推导用）
+  mapped_column(...)   → 数据库侧的定义（列类型、长度、默认值、可空、索引）
+""")
+
+import sqlalchemy
+from sqlalchemy import Column
+
+
+class SyntaxDemo(Base):
+    __tablename__ = "syntax_demo"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    a: Mapped[str] = mapped_column(String(20), default="draft")   # 完整写法（推荐）
+    b: Mapped[str] = mapped_column(String(20))                    # 没写 default
+    c: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 可空
+    d: Mapped[str]                                           # 只有标注，类型自动推导
+    e = mapped_column(String(20))                                   # 老写法，没有标注
+
+engine2 = create_engine("sqlite:///:memory:")
+Base.metadata.create_all(engine2)
+print("生成的表结构：")
+print(sqlalchemy.schema.CreateTable(SyntaxDemo.__table__).compile(engine2))
+
+print("★ 看 d 和 e 这两列 ——")
+print("  d: Mapped[str]  →  VARCHAR NOT NULL   ← 没写 mapped_column，SQLAlchemy 也能从标注推出类型")
+print("  e = mapped_column(String(20))  →  VARCHAR(20) 【可空】  ← 没写 Mapped，就丢了类型信息，")
+print("                                     而且默认变成【可空】了！")
+
+print("\n" + "-" * 60)
+print("⚠️ 最危险的一种写法：不写 mapped_column，直接赋值")
+print("-" * 60)
+
+
+class SilentBad(Base):
+    __tablename__ = "silent_bad"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: str = "draft"          # ← 看起来很像"给个默认值"
+
+
+Base.metadata.create_all(engine2)
+print(sqlalchemy.schema.CreateTable(SilentBad.__table__).compile(engine2))
+print("★ 注意：status 这一列【根本没有被创建】，而且【没有任何报错】！")
+print("  类创建成功、建表成功、什么提示都没有 —— 但这一列不存在。")
+print("  这是最阴的一类 bug：静默失效。写完模型一定要去看一眼生成的 DDL。")
+
+print("\n★ 记住分工：")
+print("  Mapped[str]              管【Python 里这是什么类型】")
+print("  mapped_column(String(20)) 管【数据库里这是什么列】")
+print("  两个配对使用，SQLAlchemy 把它们合并成一列。")
+
+print("\n" + "-" * 60)
+print("⚠️ 陷阱：String[20] 用【方括号】写，不会报错，但长度限制会消失！")
+print("-" * 60)
+print("  String(20)  →", repr(String(20)), "length =", String(20).length)
+print("  String[20]  →", repr(String[20]), "← 返回的是【类本身】，不是实例！")
+print("  所以列会变成 VARCHAR（不限长），而不是 VARCHAR(20)")
+print("  SQLite 看不出来（它本来就是不限长），")
+print("  但 PostgreSQL 里 VARCHAR 不带长度 = 不限长 → 你的『最多100字』约束【彻底消失】，还不报错。")
+
+print("\n★ Mapped[...] 是【泛型】，和 TS 的 Array<string> 一个意思：")
+print("  Mapped[str]            → 这列是 str")
+print("  Mapped[Optional[str]]  → 这列可以没有值（可空）")
+print("  Mapped[list[\"Task\"]]     → 这不是列，是【关系】")
+print("  里面的 [str] 是【类型参数】，不是下标运算。")
+
+# ============================================================
 # 【实验 1】表 = 形状，行 = 一个个具体的数据
 # 对应 B1 / C2
 # ============================================================
