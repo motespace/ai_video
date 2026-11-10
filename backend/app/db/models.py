@@ -21,7 +21,7 @@ ORM 模型 = 表结构声明。
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -33,13 +33,155 @@ def now() -> str:
 
 
 class Project(Base):
-    """项目表。"""
+    """项目：一个 AI 影视 / 漫剧创作项目。"""
 
     __tablename__ = "projects"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="draft")
-    project_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("projects.id"), nullable=True
+    cover_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+
+    # 关系：反向的那一侧在对应类里（back_populates 必须双向都写）
+    storyboards: Mapped[list["Storyboard"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",  # 删项目 → 级联删分镜
     )
+    generate_tasks: Mapped[list["GenerateTask"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+    assets: Mapped[list["Asset"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class Storyboard(Base):
+    """分镜（镜头）：它【是什么】——业务属性。
+
+    ★ 注意这里【没有】status / error / attempts / cost。
+    那些是"一次生成"的属性，住在 GenerateTask 里。
+    """
+
+    __tablename__ = "storyboards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    idx: Mapped[int] = mapped_column(Integer, nullable=False)  # 第几个镜头
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)  # 画面描述
+    image_prompt: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 图片提示词
+    video_prompt: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # 视频提示词
+    shot_size: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 景别
+    camera_movement: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # 运镜
+    duration: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )  # 时长（秒）
+    dialogue: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 对白
+    character_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+
+    project: Mapped["Project"] = relationship(back_populates="storyboards")
+    generate_tasks: Mapped[list["GenerateTask"]] = relationship(
+        back_populates="storyboard",
+        cascade="all, delete-orphan",
+    )
+
+
+class GenerateTask(Base):
+    """生成任务：一次生成【发生了什么】——运行时属性。
+
+    这是从老 shots 表拆出来的另一半。
+    一个分镜可以对应多条 GenerateTask（重试、多版本、多类型）。
+    """
+
+    __tablename__ = "generate_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    storyboard_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("storyboards.id"), nullable=True
+    )
+
+    task_type: Mapped[str] = mapped_column(String(20), nullable=False)  # image / video
+    provider: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # 模型供应商
+    provider_task_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )  # 供应商那边的 id
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    output_asset_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+
+    project: Mapped["Project"] = relationship(back_populates="generate_tasks")
+    storyboard: Mapped[Optional["Storyboard"]] = relationship(
+        back_populates="generate_tasks"
+    )
+
+    params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 生成参数 JSON
+
+    assets: Mapped[list["Asset"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )
+
+
+class Asset(Base):
+    """素材：一张图 / 一段视频。"""
+
+    __tablename__ = "assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    task_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("generate_tasks.id"), nullable=True
+    )
+    type: Mapped[str] = mapped_column(String(20), nullable=False)  # image / video
+    owner_type: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # storyboard / character / scene
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)  # 挂在哪个对象上
+    path: Mapped[str] = mapped_column(String(500), nullable=False)
+    mime: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+
+    versions: Mapped[list["AssetVersion"]] = relationship(
+        back_populates="asset", cascade="all, delete-orphan"
+    )
+    task: Mapped[Optional["GenerateTask"]] = relationship(back_populates="assets")
+
+    project: Mapped["Project"] = relationship(back_populates="assets")
+
+
+class AssetVersion(Base):
+    """素材的一个版本（老 candidates 表演进成它）。"""
+
+    __tablename__ = "asset_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    url: Mapped[str] = mapped_column(String(500), nullable=False)
+    seed: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False, default=now)
+
+    asset: Mapped["Asset"] = relationship(back_populates="versions")

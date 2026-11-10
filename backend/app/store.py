@@ -9,12 +9,16 @@ Postgres + 对象存储，但接口不变——这是分层的意义。
 这里的 check_same_thread=False + Lock 是为了 demo 能跑，
 面试时要主动说明这一点（显得你知道差距在哪，而不是误以为生产就这么写）。
 """
+
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from . import config
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from .db.models import Project, Storyboard, GenerateTask
 
 _lock = threading.Lock()
 
@@ -100,47 +104,132 @@ def _execute(sql: str, args: tuple = ()) -> int:
 
 
 # ---------------- projects ----------------
-def create_project(name: str) -> dict:
-    pid = _execute("INSERT INTO projects(name, created_at) VALUES (?,?)", (name, now()))
-    return get_project(pid)
+def create_project(name: str, db: Session) -> dict:
+    p = Project(name=name, created_at=now(), updated_at=now())
+    db.add(p)
+    db.flush()  # 刷新到数据库，拿到自增 id
+    return {
+        "id": p.id,
+        "name": p.name,
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+    }
 
 
-def get_project(pid: int) -> Optional[dict]:
-    return _query("SELECT * FROM projects WHERE id=?", (pid,), one=True)
+def get_project(pid: int, db: Session) -> Optional[dict]:
+    p = db.get(Project, pid)
+    if not p:
+        return None
+    return {
+        "id": p.id,
+        "name": p.name,
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+    }
 
 
-def list_projects() -> list[dict]:
-    return _query("SELECT * FROM projects ORDER BY id DESC")
+def list_projects(db: Session) -> list[dict]:
+    rows = db.execute(select(Project).order_by(Project.id.desc())).scalars().all()
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "created_at": p.created_at,
+            "updated_at": p.updated_at,
+        }
+        for p in rows
+    ]
 
 
 # ---------------- shots ----------------
-def add_shots(project_id: int, prompts: list[str], character_ref: Optional[str]) -> list[int]:
-    ts = now()
+def add_shots(
+    project_id: int, prompts: list[str], character_ref: Optional[str], db: Session
+) -> list[int]:
+    """批量提交镜头：每个镜头建1 条 Storyboard + 1 条 GenerateTask(pending)。"""
     ids: list[int] = []
-    with _lock:
-        conn = _connect()
-        try:
-            for i, p in enumerate(prompts):
-                cur = conn.execute(
-                    "INSERT INTO shots(project_id, idx, prompt, character_ref, status, created_at, updated_at)"
-                    " VALUES (?,?,?,?,?,?,?)",
-                    (project_id, i, p, character_ref, "pending", ts, ts),
-                )
-                ids.append(cur.lastrowid)
-            conn.commit()
-        finally:
-            conn.close()
+    # with _lock:
+    #     conn = _connect()
+    #     try:
+    #         for i, p in enumerate(prompts):
+    #             cur = conn.execute(
+    #                 "INSERT INTO shots(project_id, idx, prompt, character_ref, status, created_at, updated_at)"
+    #                 " VALUES (?,?,?,?,?,?,?)",
+    #                 (project_id, i, p, character_ref, "pending", ts, ts),
+    #             )
+    #             ids.append(cur.lastrowid)
+    #         conn.commit()
+    #     finally:
+    #         conn.close()
+
+    for i, p in enumerate(prompts):
+        sb = Storyboard(
+            project_id=project_id,
+            idx=i,
+            prompt=p,
+            character_ref=character_ref,
+            created_at=now(),          # ★ Storyboard 没有 updated_at 这一列
+        )
+        db.add(sb)
+        db.flush()  # 拿到自增 id
+        task = GenerateTask(
+            project_id=project_id,
+            storyboard_id=sb.id,
+            task_type="video",          # ★ 必填列，不给会报错
+            status="pending",
+            created_at=now(),
+            updated_at=now(),
+        )
+        db.add(task)
+        db.flush()
+        ids.append(sb.id)
     return ids
 
 
-def get_shot(sid: int) -> Optional[dict]:
-    return _query("SELECT * FROM shots WHERE id=?", (sid,), one=True)
+def get_shot(sid: int, db: Session) -> Optional[dict]:
+    """按 id 查镜头。"""
+    sb = db.get(Storyboard, sid)
+    if not sb:
+        return None
+    return _shot_to_dict(sb, db)
 
 
-def list_shots(project_id: Optional[int] = None) -> list[dict]:
-    if project_id is None:
-        return _query("SELECT * FROM shots ORDER BY id")
-    return _query("SELECT * FROM shots WHERE project_id=? ORDER BY idx", (project_id,))
+def _shot_to_dict(sb: Storyboard, db: Session) -> dict:
+    """把 Storyboard + 它的 GenerateTask 拼成老 API 的字段形状。
+    前端不能改，所以返回的字段必须和老 shots 表一模一样。
+    """
+    task = (
+        db.execute(
+            select(GenerateTask)
+            .where(GenerateTask.storyboard_id == sb.id)
+            .order_by(GenerateTask.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+    return {
+        "id": sb.id,
+        "project_id": sb.project_id,
+        "idx": sb.idx,
+        "prompt": sb.prompt,
+        "character_ref": sb.character_ref,
+        "status": task.status if task else "pending",
+        "error": task.error if task else None,
+        "attempts": task.retry_count if task else 0,
+        "duration_seconds": task.duration_seconds if task else None,
+        "cost": task.cost if task else 0.0,
+        "selected_candidate_id": None,   # ★ 这轮先写 None，下轮接 asset_versions
+        "created_at": sb.created_at,
+        "updated_at": task.updated_at if task else sb.created_at,
+    }
+
+
+def list_shots(project_id: Optional[int] = None, db: Session = None) -> list[dict]:
+    """列镜头。可按 project_id 过滤。"""
+    stmt = select(Storyboard).order_by(Storyboard.id)
+    if project_id is not None:
+        stmt = stmt.where(Storyboard.project_id == project_id)
+    rows = db.execute(stmt).scalars().all()
+    return [_shot_to_dict(r, db) for r in rows]
 
 
 def update_shot(sid: int, **fields: Any) -> None:
@@ -184,8 +273,13 @@ def select_candidate(shot_id: int, candidate_id: int) -> None:
     with _lock:
         conn = _connect()
         try:
-            conn.execute("UPDATE candidates SET is_selected=0 WHERE shot_id=?", (shot_id,))
-            conn.execute("UPDATE candidates SET is_selected=1 WHERE id=? AND shot_id=?", (candidate_id, shot_id))
+            conn.execute(
+                "UPDATE candidates SET is_selected=0 WHERE shot_id=?", (shot_id,)
+            )
+            conn.execute(
+                "UPDATE candidates SET is_selected=1 WHERE id=? AND shot_id=?",
+                (candidate_id, shot_id),
+            )
             conn.commit()
         finally:
             conn.close()
